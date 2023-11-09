@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	mapset "github.com/deckarep/golang-set/v2"
 	"github.com/gorilla/mux"
 	"golang.org/x/net/websocket"
 	"io"
@@ -31,23 +33,27 @@ func NewUser(conn *websocket.Conn, username string, roomName string) *ConnectedU
 }
 
 type Server struct {
-	globalRoomConns map[*ConnectedUser]bool
-	privateRooms    map[string]map[*ConnectedUser]bool
-	mut             sync.Mutex
-	msgChannel      chan Message
+	globalRoomConns   map[*ConnectedUser]bool
+	privateRooms      map[string]map[*ConnectedUser]bool
+	mut               sync.Mutex
+	msgChannel        chan Message
+	ConnectedUsername mapset.Set[*ConnectedUser]
 }
 
 func NewServer() *Server {
 	return &Server{
-		globalRoomConns: make(map[*ConnectedUser]bool),
-		privateRooms:    make(map[string]map[*ConnectedUser]bool),
-		msgChannel:      make(chan Message),
+		globalRoomConns:   make(map[*ConnectedUser]bool),
+		privateRooms:      make(map[string]map[*ConnectedUser]bool),
+		msgChannel:        make(chan Message),
+		ConnectedUsername: mapset.NewSet(&ConnectedUser{}),
 	}
 }
 
 func (s *Server) addConnection(user *ConnectedUser) {
 	s.mut.Lock()
 	defer s.mut.Unlock()
+	s.ConnectedUsername.Add(user)
+	s.broadCastConnectedUser(user.username)
 	if user.roomName != "" {
 		if s.privateRooms[user.roomName] == nil {
 			s.privateRooms[user.roomName] = make(map[*ConnectedUser]bool)
@@ -62,6 +68,7 @@ func (s *Server) closeConnection(user *ConnectedUser) {
 	s.mut.Lock()
 	fmt.Printf("User %s disconnected\n", user.username)
 	defer s.mut.Unlock()
+	s.ConnectedUsername.Remove(user)
 	delete(s.globalRoomConns, user)
 	delete(s.privateRooms[user.roomName], user)
 	if len(s.privateRooms) == 0 {
@@ -69,7 +76,7 @@ func (s *Server) closeConnection(user *ConnectedUser) {
 	}
 	err := user.conn.Close()
 	if err != nil {
-		fmt.Println("Error attempting to close the connection for user ", user.username)
+		fmt.Println("Error attempting to close the connection for user " + user.username + ", The error is the following " + err.Error())
 		return
 	}
 }
@@ -115,7 +122,24 @@ func (s *Server) messageHandler() {
 	}
 }
 
-func (*Server) getAllConnectedUser() {
+func (s *Server) broadCastConnectedUser(username string) {
+	usernames := make([]string, 0)
+
+	for user := range s.ConnectedUsername.Iter() {
+		usernames = append(usernames, user.username)
+	}
+
+	data, err := json.Marshal(usernames)
+	if err != nil {
+		fmt.Println("Error encoding usernames: ", err)
+		return
+	}
+
+	for user := range s.ConnectedUsername.Iter() {
+		if _, err := user.conn.Write(data); err != nil {
+			fmt.Println("Error broadcasting usernames: ", err)
+		}
+	}
 }
 
 var server = NewServer()
@@ -127,10 +151,12 @@ func WebsocketHandler(conn *websocket.Conn) {
 	user := NewUser(conn, username, roomName)
 	fmt.Printf("Incoming connection from %s with username: %s\n", conn.RemoteAddr(), username)
 	server.addConnection(user)
+	server.broadCastConnectedUser(username)
 	server.readLoop(user)
 }
 
 func main() {
+	server.ConnectedUsername.Clear()
 	r := mux.NewRouter()
 	r.Handle("/ws/{username}", websocket.Handler(WebsocketHandler))
 	r.Handle("/ws/{username}/{room}", websocket.Handler(WebsocketHandler))
