@@ -13,9 +13,9 @@ import (
 )
 
 type Message struct {
-	payload         []byte
-	destinationRoom string
-	sender          *websocket.Conn
+	Payload         string
+	DestinationRoom string
+	SenderName      string
 }
 
 type ConnectedUser struct {
@@ -53,7 +53,7 @@ func (s *Server) addConnection(user *ConnectedUser) {
 	s.mut.Lock()
 	defer s.mut.Unlock()
 	s.ConnectedUsername.Add(user)
-	s.broadCastConnectedUser(user.username)
+	s.broadCastConnectedUser()
 	if user.roomName != "" {
 		if s.privateRooms[user.roomName] == nil {
 			s.privateRooms[user.roomName] = make(map[*ConnectedUser]bool)
@@ -93,28 +93,32 @@ func (s *Server) readLoop(user *ConnectedUser) {
 			fmt.Println("Error trying to read the message ", err.Error())
 		}
 		s.msgChannel <- Message{
-			payload:         buff[:n],
-			destinationRoom: user.roomName,
-			sender:          user.conn,
+			Payload:         string(buff[:n]),
+			DestinationRoom: user.roomName,
+			SenderName:      user.username,
 		}
 	}
 }
 
 func (s *Server) messageHandler() {
 	for msg := range s.msgChannel {
-		if msg.destinationRoom == "" {
+		jsonMessage, err := json.Marshal(msg)
+		if err != nil {
+			println("Error trying to send the message during json conversion: " + err.Error())
+		}
+		if msg.DestinationRoom == "" {
 			for user := range s.globalRoomConns {
-				if user.conn != msg.sender {
-					if _, err := user.conn.Write(msg.payload); err != nil {
-						println("Error broadcasting the message in the global room " + err.Error())
+				if user.username != msg.SenderName {
+					if _, err := user.conn.Write(jsonMessage); err != nil {
+						fmt.Println("Error broadcasting the message in the global room " + err.Error())
 					}
 				}
 			}
 		} else {
-			for user := range s.privateRooms[msg.destinationRoom] {
-				if user.conn != msg.sender {
-					if _, err := user.conn.Write(msg.payload); err != nil {
-						println("Error broadcasting the message in the global room " + err.Error())
+			for user := range s.privateRooms[msg.DestinationRoom] {
+				if user.username != msg.SenderName {
+					if _, err := user.conn.Write(jsonMessage); err != nil {
+						fmt.Println("Error broadcasting the message in the global room " + err.Error())
 					}
 				}
 			}
@@ -122,7 +126,7 @@ func (s *Server) messageHandler() {
 	}
 }
 
-func (s *Server) broadCastConnectedUser(username string) {
+func (s *Server) broadCastConnectedUser() {
 	usernames := make([]string, 0)
 
 	for user := range s.ConnectedUsername.Iter() {
@@ -149,9 +153,9 @@ func WebsocketHandler(conn *websocket.Conn) {
 	username := vars["username"]
 	roomName := vars["room"]
 	user := NewUser(conn, username, roomName)
-	fmt.Printf("Incoming connection from %s with username: %s\n", conn.RemoteAddr(), username)
+	fmt.Printf("Incoming connection from %s with username: %s in room: %s\n", conn.RemoteAddr(), username, roomName)
 	server.addConnection(user)
-	server.broadCastConnectedUser(username)
+	server.broadCastConnectedUser()
 	server.readLoop(user)
 }
 
