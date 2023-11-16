@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 )
 
@@ -132,6 +133,8 @@ func (s *Server) broadCastConnectedUser() {
 	for user := range s.ConnectedUsername.Iter() {
 		usernames = append(usernames, user.username)
 	}
+
+	sort.Strings(usernames)
 
 	data, err := json.Marshal(usernames)
 	if err != nil {
