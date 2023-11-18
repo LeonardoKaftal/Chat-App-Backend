@@ -5,4 +5,4 @@ RUN mvn clean package -DskipTests
 FROM openjdk:21-jdk-slim
 COPY --from=build /target/chat-0.0.1-SNAPSHOT.jar chat.jar
 EXPOSE 8080
-ENTRYPOINT ["JAVA", "-jar", "chat.jar"]
+ENTRYPOINT ["java", "-jar", "chat.jar"]
